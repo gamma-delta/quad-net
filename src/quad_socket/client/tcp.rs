@@ -1,6 +1,8 @@
+use std::io::ErrorKind;
 use std::net::ToSocketAddrs;
 
 use std::net::TcpStream;
+use std::sync::mpsc::TryRecvError;
 use std::sync::mpsc::{self, Receiver};
 
 use crate::{error::Error, quad_socket::protocol::MessageReader};
@@ -18,8 +20,14 @@ impl TcpSocket {
         self.stream.write(data).unwrap();
     }
 
-    pub fn try_recv(&mut self) -> Option<Vec<u8>> {
-        self.rx.try_recv().ok()
+    pub fn try_recv(&mut self) -> Option<Result<Vec<u8>, Error>> {
+        match self.rx.try_recv() {
+            Ok(it) => Some(Ok(it)),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                Some(Err(Error::IOError(ErrorKind::ConnectionAborted.into())))
+            }
+        }
     }
 }
 

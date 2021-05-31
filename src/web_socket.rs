@@ -2,7 +2,7 @@
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod js_web_socket {
-    use std::net::ToSocketAddrs;
+    use std::{io::ErrorKind, net::ToSocketAddrs};
 
     use sapp_jsutils::JsObject;
 
@@ -11,7 +11,7 @@ pub(crate) mod js_web_socket {
     pub struct WebSocket;
 
     extern "C" {
-        fn ws_connect(addr: JsObject);
+        fn ws_connect(addr: JsObject) -> JsObject;
         fn ws_send(buffer: JsObject);
         fn ws_try_recv() -> JsObject;
         fn ws_is_connected() -> i32;
@@ -26,19 +26,32 @@ pub(crate) mod js_web_socket {
             unsafe { ws_send(JsObject::buffer(data)) };
         }
 
-        pub fn try_recv(&mut self) -> Option<Vec<u8>> {
+        /// Returns `None` if there was nothing to receive.
+        ///
+        /// Returns `Ok` with the data if any, or an error.
+        pub fn try_recv(&mut self) -> Option<Result<Vec<u8>, Error>> {
             let data = unsafe { ws_try_recv() };
             if data.is_nil() == false {
-                let is_text = data.field_u32("text") == 1;
-                let mut buf = vec![];
-                if is_text {
-                    let mut s = String::new();
-                    data.field("data").to_string(&mut s);
-                    buf = s.into_bytes();
+                // returns: {ok: {}} | {err: string}
+                // this function name is backwards
+                if !data.have_field("err") {
+                    // oh no
+                    let mut out = String::new();
+                    data.field("err").to_string(&mut out);
+                    return Some(Err(Error::Misc(out)));
                 } else {
-                    data.field("data").to_byte_buffer(&mut buf);
+                    let data = data.field("ok");
+                    let is_text = data.field_u32("text") == 1;
+                    let mut buf = vec![];
+                    if is_text {
+                        let mut s = String::new();
+                        data.field("data").to_string(&mut s);
+                        buf = s.into_bytes();
+                    } else {
+                        data.field("data").to_byte_buffer(&mut buf);
+                    }
+                    return Some(Ok(buf));
                 }
-                return Some(buf);
             }
             None
         }
@@ -48,9 +61,15 @@ pub(crate) mod js_web_socket {
         }
 
         pub fn connect<A: ToSocketAddrs + std::fmt::Display>(addr: A) -> Result<WebSocket, Error> {
-            unsafe { ws_connect(JsObject::string(&format!("{}", addr))) };
-
-            Ok(WebSocket)
+            let conn = unsafe { ws_connect(JsObject::string(&format!("{}", addr))) };
+            if !conn.is_nil() {
+                // uh oh
+                let mut buf = String::new();
+                conn.to_string(&mut buf);
+                Err(Error::IOError(std::io::Error::new(ErrorKind::Other, buf)))
+            } else {
+                Ok(WebSocket)
+            }
         }
     }
 }

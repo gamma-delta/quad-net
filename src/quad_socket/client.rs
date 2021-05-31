@@ -27,7 +27,7 @@ impl QuadSocket {
         }
     }
 
-    pub fn try_recv(&mut self) -> Option<Vec<u8>> {
+    pub fn try_recv(&mut self) -> Option<Result<Vec<u8>, Error>> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.tcp_socket.try_recv()
@@ -48,11 +48,20 @@ impl QuadSocket {
         self.send(&SerBin::serialize_bin(data));
     }
 
-    pub fn try_recv_bin<T: nanoserde::DeBin + std::fmt::Debug>(&mut self) -> Option<T> {
-        let bytes = self.try_recv()?;
-        let data: T = nanoserde::DeBin::deserialize_bin(&bytes).expect("Cant parse message");
+    pub fn try_recv_bin<T: nanoserde::DeBin + std::fmt::Debug>(
+        &mut self,
+    ) -> Option<Result<T, Error>> {
+        let bytes = match self.try_recv() {
+            Some(Ok(it)) => it,
+            Some(Err(oh_no)) => return Some(Err(oh_no)),
+            None => return None,
+        };
+        let data: T = match nanoserde::DeBin::deserialize_bin(&bytes) {
+            Ok(it) => it,
+            Err(oh_no) => return Some(Err(Error::Misc(oh_no.to_string()))),
+        };
 
-        Some(data)
+        Some(Ok(data))
     }
 }
 
